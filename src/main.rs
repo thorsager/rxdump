@@ -35,7 +35,7 @@ fn main() {
         Ok(f) => f,
     };
 
-    let word_size: usize = cli.word_size.unwrap_or(2);
+    let word_size: usize = cli.word_size.unwrap_or(1);
     let line_words: usize = LINE_BYTES / word_size;
     let hex_length: usize = word_size * 2 * line_words + line_words;
 
@@ -50,14 +50,14 @@ fn main() {
         let offset_str = cli.offset.unwrap();
         let pos = match as_u64(&offset_str) {
             Err(e) => {
-                println!("invalid offset value '{}': {}", &offset_str, e);
+                eprintln!("invalid offset value '{}': {}", &offset_str, e);
                 std::process::exit(3);
             }
             Ok(v) => v,
         };
         match f.seek(SeekFrom::Start(pos)) {
             Err(e) => {
-                println!(
+                eprintln!(
                     "could not seek to pos {} on file {}: {}",
                     pos, cli.filename, e
                 );
@@ -65,7 +65,7 @@ fn main() {
             }
             Ok(n) => offset += usize::try_from(n).unwrap(),
         }
-        println!("**")
+        println!("**") // indicate not at SOF
     };
 
     // calculate limit if passed
@@ -73,7 +73,7 @@ fn main() {
         let limit_str = cli.limit.unwrap();
         limit = match as_u64(&limit_str) {
             Err(e) => {
-                println!("invalid limit value '{}': {}", &limit_str, e);
+                eprintln!("invalid limit value '{}': {}", &limit_str, e);
                 std::process::exit(3);
             }
             Ok(v) => v.try_into().unwrap(),
@@ -85,11 +85,11 @@ fn main() {
         let mut n = match f.read(&mut buffer) {
             Ok(size) => size,
             Err(e) => {
-                println!("while reading bufer: {}", e);
+                eprintln!("while reading bufer: {}", e);
                 0
             }
         };
-        if n == 0 {
+        if n == 0 && skipped_lines == 0 {
             break;
         }
         if limit != 0 && (offset + n) >= limit {
@@ -104,30 +104,40 @@ fn main() {
             continue;
         }
 
-        let mut hex: String = String::new();
-        let mut ascii: String = String::new();
-        for (i, word) in buffer[0..n].chunks(word_size).enumerate() {
-            hex += &word_as_hex(word);
-            if i < n {
-                hex += " "
-            }
-            ascii += &word_as_ascii(word);
-        }
+        let (hex,ascii) = buffer_as_hex_and_ascii(&buffer, n, word_size);
+
         if skipped_lines > 0 {
             skipped_lines = 0;
-            println!("*")
+            println!("*") // indicate one or more skipped lines
         }
 
         println!("{:08x}  {: <3$} |{}|", (offset - n), hex, ascii, hex_length);
         last_was_all_zero = is_all_zero;
 
         if offset == limit {
-            println!("**");
+            println!("**"); // indicate end before EOF
             break;
         }
     }
 }
 
+// buffer_as_hex_and_ascii will iterate over the the first "n" bytes of the buffer
+// in "word_sized" chunks and add them to both the hexadecimal and the ascii output-strings.
+fn buffer_as_hex_and_ascii(buf: &[u8], n: usize, word_size: usize) -> (String,String) {
+    let mut hex: String = String::new();
+    let mut ascii: String = String::new();
+    for (i, word) in buf[0..n].chunks(word_size).enumerate() {
+        hex += &word_as_hex(word);
+        if i < n {
+            hex += " "
+        }
+        ascii += &word_as_ascii(word);
+    }
+    (hex,ascii)
+}
+
+// as_u64 parses a string to a u64, if the string is prefixed with '0x' the string
+// will be parsed as hexadecimal, if not it will be parsed as decimal.
 fn as_u64(s: &String) -> Result<u64, std::num::ParseIntError> {
     if s.starts_with("0x") {
         let h = s.trim_start_matches("0x");
@@ -158,7 +168,7 @@ fn word_as_hex(word: &[u8]) -> String {
 fn word_as_ascii(word: &[u8]) -> String {
     let mut a: String = String::new();
     for (_, b) in word.iter().enumerate() {
-        if *b >= 0x20 && *b < 0x7f {
+        if *b >= 0x20 && *b < 0x7f { // printable chars
             a.push(*b as char)
         } else {
             a.push('.')
