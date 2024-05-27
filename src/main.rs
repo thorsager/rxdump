@@ -24,16 +24,21 @@ struct Cli {
     limit: Option<String>,
 }
 
+struct Line {
+    ascii: String,
+    hex: String,
+    start_offset: usize,
+    hex_length: usize,
+}
+
+impl Line {
+    fn print(&self) {
+        println!("{:08x}  {: <3$} |{}|", self.start_offset, self.hex, self.ascii, self.hex_length);
+    }
+}     
+
 fn main() {
     let cli = Cli::parse();
-
-    let mut f = match File::open(&cli.filename) {
-        Err(e) => {
-            println!("could not open {}: {}", cli.filename, e);
-            std::process::exit(2);
-        }
-        Ok(f) => f,
-    };
 
     let word_size: usize = cli.word_size.unwrap_or(1);
     let line_words: usize = LINE_BYTES / word_size;
@@ -44,6 +49,27 @@ fn main() {
     let mut limit: usize = 0;
     let mut last_was_all_zero = false;
     let mut skipped_lines = 0;
+
+    // calculate limit if passed as argument
+    if cli.limit.is_some() {
+        let limit_str = cli.limit.unwrap();
+        limit = match as_u64(&limit_str) {
+            Err(e) => {
+                eprintln!("invalid limit value '{}': {}", &limit_str, e);
+                std::process::exit(3);
+            }
+            Ok(v) => v.try_into().unwrap(),
+        };
+    }
+
+    // open file
+    let mut f = match File::open(&cli.filename) {
+        Err(e) => {
+            println!("could not open {}: {}", cli.filename, e);
+            std::process::exit(2);
+        }
+        Ok(f) => f,
+    };
 
     // possition to offset if passed
     if cli.offset.is_some() {
@@ -68,18 +94,6 @@ fn main() {
         println!("**") // indicate not at SOF
     };
 
-    // calculate limit if passed
-    if cli.limit.is_some() {
-        let limit_str = cli.limit.unwrap();
-        limit = match as_u64(&limit_str) {
-            Err(e) => {
-                eprintln!("invalid limit value '{}': {}", &limit_str, e);
-                std::process::exit(3);
-            }
-            Ok(v) => v.try_into().unwrap(),
-        };
-    }
-
     // read through file
     loop {
         let mut n = match f.read(&mut buffer) {
@@ -99,19 +113,21 @@ fn main() {
         offset += n;
         let is_all_zero = all_zero(&buffer);
 
+        // skip multiple all_zero lines, if they are complete lines
         if is_all_zero && last_was_all_zero && (n == buffer.len()) {
             skipped_lines += 1;
             continue;
         }
 
-        let (hex,ascii) = buffer_as_hex_and_ascii(&buffer, n, word_size);
+        let line = build_line(offset, &buffer, n, word_size, hex_length);
 
         if skipped_lines > 0 {
             skipped_lines = 0;
             println!("*") // indicate one or more skipped lines
         }
 
-        println!("{:08x}  {: <3$} |{}|", (offset - n), hex, ascii, hex_length);
+        line.print();
+
         last_was_all_zero = is_all_zero;
 
         if offset == limit {
@@ -121,9 +137,9 @@ fn main() {
     }
 }
 
-// buffer_as_hex_and_ascii will iterate over the the first "n" bytes of the buffer
+// line_from_buffer will iterate over the the first "n" bytes of the buffer
 // in "word_sized" chunks and add them to both the hexadecimal and the ascii output-strings.
-fn buffer_as_hex_and_ascii(buf: &[u8], n: usize, word_size: usize) -> (String,String) {
+fn build_line(end_offset: usize, buf: &[u8], n: usize, word_size: usize, hex_length: usize) -> Line {
     let mut hex: String = String::new();
     let mut ascii: String = String::new();
     for (i, word) in buf[0..n].chunks(word_size).enumerate() {
@@ -133,7 +149,7 @@ fn buffer_as_hex_and_ascii(buf: &[u8], n: usize, word_size: usize) -> (String,St
         }
         ascii += &word_as_ascii(word);
     }
-    (hex,ascii)
+    Line { ascii, hex, start_offset: end_offset-n, hex_length}
 }
 
 // as_u64 parses a string to a u64, if the string is prefixed with '0x' the string
