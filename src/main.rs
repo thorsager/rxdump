@@ -11,6 +11,10 @@ struct Cli {
     /// Input filename
     filename: String,
 
+    /// Do not skip all zero lines
+    #[arg(long, action)]
+    show_zero_lines: bool,
+
     /// Number of bytes in a "word"
     #[arg(short, long, value_name = "BYTES")]
     word_size: Option<usize>,
@@ -38,6 +42,7 @@ fn main() {
     let word_size: usize = cli.word_size.unwrap_or(2);
     let line_words: usize = LINE_BYTES / word_size;
     let hex_length: usize = word_size * 2 * line_words + line_words;
+    let skip_lines: bool = !cli.show_zero_lines;
 
     let mut buffer = [0; LINE_BYTES];
     let mut offset: usize = 0;
@@ -90,6 +95,11 @@ fn main() {
             }
         };
         if n == 0 {
+            // we are EOF
+            if skipped_lines > 0 {
+                println!("*")
+            }
+            println!("{:08x}", (offset - n));
             break;
         }
         if limit != 0 && (offset + n) >= limit {
@@ -97,7 +107,10 @@ fn main() {
         }
 
         offset += n;
-        let is_all_zero = all_zero(&buffer);
+        let mut is_all_zero = false;
+        if skip_lines {
+            is_all_zero = all_zero(&buffer);
+        }
 
         if is_all_zero && last_was_all_zero && (n == buffer.len()) {
             skipped_lines += 1;
@@ -139,7 +152,7 @@ fn as_u64(s: &String) -> Result<u64, std::num::ParseIntError> {
 
 // all_zero will return true if all bytes in a byte array is zero
 fn all_zero(line: &[u8]) -> bool {
-    line.iter().all(|&x| x == 0)
+    line.iter().position(|&x| x != 0) == None
 }
 
 // word_as_hex converts an array of bytes to a hex string, it will pad
