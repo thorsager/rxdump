@@ -22,6 +22,9 @@ struct Cli {
     /// Limit of bytes to read from file (hexadecimal value prefix with '0x')
     #[arg(short, long, value_name = "BYTES")]
     limit: Option<String>,
+
+    #[arg(long = "show-empty-lines", action)]
+    show_empty_lines: bool,
 }
 
 struct Line {
@@ -33,9 +36,12 @@ struct Line {
 
 impl Line {
     fn print(&self) {
-        println!("{:08x}  {: <3$} |{}|", self.start_offset, self.hex, self.ascii, self.hex_length);
+        println!(
+            "{:08x}  {: <3$} |{}|",
+            self.start_offset, self.hex, self.ascii, self.hex_length
+        );
     }
-}     
+}
 
 fn main() {
     let cli = Cli::parse();
@@ -49,6 +55,7 @@ fn main() {
     let mut limit: usize = 0;
     let mut last_was_all_zero = false;
     let mut skipped_lines = 0;
+    let skip_zero_lines = !cli.show_empty_lines;
 
     // calculate limit if passed as argument
     if cli.limit.is_some() {
@@ -111,7 +118,7 @@ fn main() {
         }
 
         offset += n;
-        let is_all_zero = all_zero(&buffer);
+        let is_all_zero = skip_zero_lines && all_zero(&buffer);
 
         // skip multiple all_zero lines, if they are complete lines
         if is_all_zero && last_was_all_zero && (n == buffer.len()) {
@@ -119,14 +126,12 @@ fn main() {
             continue;
         }
 
-        let line = build_line(offset, &buffer, n, word_size, hex_length);
-
         if skipped_lines > 0 {
             skipped_lines = 0;
             println!("*") // indicate one or more skipped lines
         }
 
-        line.print();
+        build_line(offset, &buffer, n, word_size, hex_length).print();
 
         last_was_all_zero = is_all_zero;
 
@@ -139,7 +144,13 @@ fn main() {
 
 // line_from_buffer will iterate over the the first "n" bytes of the buffer
 // in "word_sized" chunks and add them to both the hexadecimal and the ascii output-strings.
-fn build_line(end_offset: usize, buf: &[u8], n: usize, word_size: usize, hex_length: usize) -> Line {
+fn build_line(
+    end_offset: usize,
+    buf: &[u8],
+    n: usize,
+    word_size: usize,
+    hex_length: usize,
+) -> Line {
     let mut hex: String = String::new();
     let mut ascii: String = String::new();
     for (i, word) in buf[0..n].chunks(word_size).enumerate() {
@@ -149,7 +160,12 @@ fn build_line(end_offset: usize, buf: &[u8], n: usize, word_size: usize, hex_len
         }
         ascii += &word_as_ascii(word);
     }
-    Line { ascii, hex, start_offset: end_offset-n, hex_length}
+    Line {
+        ascii,
+        hex,
+        start_offset: end_offset - n,
+        hex_length,
+    }
 }
 
 // as_u64 parses a string to a u64, if the string is prefixed with '0x' the string
@@ -165,7 +181,7 @@ fn as_u64(s: &String) -> Result<u64, std::num::ParseIntError> {
 
 // all_zero will return true if all bytes in a byte array is zero
 fn all_zero(line: &[u8]) -> bool {
-    line.iter().all(|&x| x == 0)
+    line.iter().position(|&x| x != 0) == None
 }
 
 // word_as_hex converts an array of bytes to a hex string, it will pad
@@ -184,7 +200,8 @@ fn word_as_hex(word: &[u8]) -> String {
 fn word_as_ascii(word: &[u8]) -> String {
     let mut a: String = String::new();
     for (_, b) in word.iter().enumerate() {
-        if *b >= 0x20 && *b < 0x7f { // printable chars
+        if *b >= 0x20 && *b < 0x7f {
+            // printable chars
             a.push(*b as char)
         } else {
             a.push('.')
